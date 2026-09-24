@@ -148,3 +148,113 @@ def test_stats_math():
     assert s["profit_factor"] == pytest.approx(2.5)
     assert s["expectancy_r"] == pytest.approx(0.75)
     assert s["max_drawdown_pct"] == pytest.approx(200 / 1200 * 100)
+
+
+# -- scheduler -------------------------------------------------------------
+from datetime import datetime, timezone  # noqa: E402
+
+from papertrader.scheduler import Scheduler, next_run, report_due, scan_lock  # noqa: E402
+
+
+def _dt(h, m, s=0):
+    return datetime(2026, 9, 24, h, m, s, tzinfo=timezone.utc)
+
+
+def test_next_run_aligned_to_hour_plus_offset():
+    assert next_run(_dt(10, 0, 30), 60, 120) == _dt(10, 2)
+    assert next_run(_dt(10, 2, 0), 60, 120) == _dt(11, 2)
+    assert next_run(_dt(10, 59), 60, 120) == _dt(11, 2)
+    assert next_run(_dt(10, 16), 15, 0) == _dt(10, 30)
+
+
+def test_report_due_once_per_day():
+    assert not report_due(_dt(20, 59), "21:00", None)
+    assert report_due(_dt(21, 5), "21:00", None)
+    assert not report_due(_dt(21, 5), "21:00", "2026-09-24")
+    assert not report_due(_dt(21, 5), None, None)
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = _dt(20, 30)
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now = self.now + pd.Timedelta(seconds=seconds).to_pytimedelta()
+
+
+def _scheduler(cfgs, clock, scans, reports, msgs, state):
+    it = iter(cfgs)
+    last = {}
+
+    def load():
+        last["cfg"] = next(it, last.get("cfg"))
+        if last["cfg"].get("mode") != "paper":
+            raise LiveTradingLocked("locked")
+        return last["cfg"]
+
+    return Scheduler(load, lambda c: scans.append(clock()), lambda c: reports.append(clock()), msgs.append,
+                     state.get, state.__setitem__, clock=clock, sleep=clock.sleep)
+
+
+def test_scheduler_runs_hourly_and_reports_daily():
+    clock, scans, reports, msgs, state = FakeClock(), [], [], [], {}
+    cfg = {"mode": "paper", "schedule": {"interval_minutes": 60, "offset_seconds": 120, "daily_report_utc": "21:00"}}
+    _scheduler([cfg], clock, scans, reports, msgs, state).run(max_runs=5)
+    assert scans == [_dt(20, 30), _dt(21, 2), _dt(22, 2), _dt(23, 2), datetime(2026, 9, 25, 0, 2, tzinfo=timezone.utc)]
+    assert reports == [_dt(21, 2)]  # once, not every hour after 21:00
+    assert "PAPER ONLY" in msgs[0]
+
+
+def test_scheduler_stops_if_config_switched_off_paper():
+    clock, scans, reports, msgs, state = FakeClock(), [], [], [], {}
+    paper = {"mode": "paper", "schedule": {}}
+    s = _scheduler([paper, paper, {"mode": "live"}], clock, scans, reports, msgs, state)
+    with pytest.raises(LiveTradingLocked):
+        s.run(max_runs=10)
+    assert len(scans) == 1
+    assert "Scheduler stopped" in msgs[-1]
+
+
+def test_scheduler_survives_scan_errors():
+    clock, msgs, state = FakeClock(), [], {}
+    calls = []
+
+    def flaky(cfg):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise RuntimeError("feed down")
+
+    s = Scheduler(lambda: {"mode": "paper", "schedule": {"daily_report_utc": None}}, flaky, lambda c: None,
+                  msgs.append, state.get, state.__setitem__, clock=clock, sleep=clock.sleep)
+    s.run(max_runs=4)
+    assert len(calls) == 4
+    assert sum("failed" in m for m in msgs) == 1  # alerted once, not every hour
+
+
+def test_scan_lock_blocks_overlap(tmp_path):
+    db = str(tmp_path / "paper.db")
+    with scan_lock(db) as a:
+        with scan_lock(db) as b:
+            assert a and not b
+    with scan_lock(db) as c:
+        assert c
+
+
+def test_cli_run_scheduler_one_pass(tmp_path, capsys):
+    csv_dir = tmp_path / "csv"
+    csv_dir.mkdir()
+    synthetic(600, start="2020-01-01").to_csv(csv_dir / "BTC-USD.csv")
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(f"""mode: paper
+database: {tmp_path / 'paper.db'}
+markets:
+  crypto: {{source: "csv:{csv_dir}", timeframe: 1h, symbols: [BTC-USD]}}
+strategies:
+  ema_crossover: {{}}
+""")
+    assert main(["-c", str(cfg), "run", "--dry-run", "--max-runs", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "PAPER ONLY" in out and "scan complete" in out

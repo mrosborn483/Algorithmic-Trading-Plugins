@@ -1,0 +1,17 @@
+# Paper-only hourly scheduler.
+#   cp config.example.yaml config.yaml && cp .env.example .env   (fill in Telegram)
+#   docker compose up -d --build
+#   docker compose logs -f
+#   docker compose run --rm papertrader report --send
+services:
+  papertrader:
+    build: .
+    command: ["run"]
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}

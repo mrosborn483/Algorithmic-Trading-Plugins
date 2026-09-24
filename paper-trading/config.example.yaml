@@ -63,6 +63,13 @@ strategies:
     enabled: true
     markets: [crypto, stocks, fx]
 
+# Paper-only scheduler (`python -m papertrader run`). Re-read before every scan, so edits
+# apply without a restart. Setting mode to anything but paper stops the scheduler.
+schedule:
+  interval_minutes: 60         # scan hourly, aligned to the top of the hour
+  offset_seconds: 120          # ...2 minutes after the hour so the new candles are published
+  daily_report_utc: "21:00"    # leaderboard to Telegram once a day (null to disable)
+
 telegram:
   # Credentials are read from env vars TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (never put them here)
   notify:

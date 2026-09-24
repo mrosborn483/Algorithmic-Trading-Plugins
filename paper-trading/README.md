@@ -5,9 +5,9 @@ every simulated entry and every **WIN / LOSS** to Telegram and ranks the strateg
 can pick which ones deserve real money.
 
 > **Live trading is locked.** There is no live broker in this code, and any config with
-> `mode` set to anything but `paper` is refused. Automation (schedulers, always-on loops,
-> live order routing) is also held back on purpose. You run `scan` yourself until the
-> paper phase is finalized.
+> `mode` set to anything but `paper` is refused. The only automation is the **paper-only**
+> hourly scheduler (`run`). It re-checks paper mode before every scan and stops if the
+> config asks for anything else.
 
 ## Quick start
 
@@ -22,6 +22,7 @@ python -m papertrader scan --dry-run       # one paper pass, alerts printed inst
 python -m papertrader scan                 # one paper pass, alerts sent to Telegram
 python -m papertrader positions            # open paper positions
 python -m papertrader report --send        # wins/losses leaderboard -> Telegram
+python -m papertrader run                  # PAPER-ONLY scheduler: scan hourly + daily report
 ```
 
 Market data comes from Yahoo Finance by default and needs no API keys: `AAPL`, `EURUSD=X`,
@@ -82,6 +83,42 @@ subclass `Strategy` in `papertrader/strategies/library.py`, return
 - Everything is logged to SQLite (`data/paper.db`). `report --csv board.csv` exports the
   leaderboard and every trade.
 
+## Hourly scheduler (paper only)
+
+`python -m papertrader run` scans right away and then at 2 minutes past every hour, once the
+hourly candles have closed. Once a day (`daily_report_utc`, 21:00 UTC by default) it also
+sends the leaderboard to Telegram. Settings live in the `schedule:` block of `config.yaml`,
+which is re-read before every scan, so edits apply without a restart.
+
+- It announces itself in Telegram when it starts and stops.
+- If a data feed or scan fails, it alerts you on the 1st, 3rd and every 24th consecutive
+  failure (not every hour) and keeps going.
+- A file lock stops a manual `scan` and a scheduled scan from running at the same time.
+- If `mode` is changed away from `paper`, it sends ⛔ and exits.
+- Use `run --dry-run` to try it without sending anything to Telegram.
+
+## Deploying to a server
+
+Any always-on Linux box works. The load is tiny: 1 vCPU, 1 GB RAM and well under 1 GB of disk.
+It needs outbound HTTPS to Yahoo Finance (`query1/query2.finance.yahoo.com`) and
+`api.telegram.org`. Keep the server clock in sync (NTP), because scans are aligned to UTC hours.
+
+**Docker (recommended)**
+
+```bash
+git clone <this repo> && cd Algorithmic-Trading-Plugins/paper-trading
+cp config.example.yaml config.yaml
+cp .env.example .env                           # add TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+docker compose up -d --build                   # starts the paper-only scheduler, restarts on reboot
+docker compose logs -f
+docker compose run --rm papertrader report --send
+docker compose run --rm papertrader backtest
+```
+
+The journal is kept in `./data/paper.db` on the host. Back that file up; it holds your paper track record.
+
+**systemd (no Docker)**: see `deploy/papertrader.service`.
+
 ## Choosing strategies for live trading
 
 `report` ranks each strategy × market and marks with ★ the ones that meet all of the
@@ -96,10 +133,10 @@ subclass `Strategy` in `papertrader/strategies/library.py`, return
 Suggested process:
 
 1. Run `backtest` and switch off or retune strategy × market pairs that are clearly negative.
-2. Paper-trade the rest for several weeks, until each has 30 or more trades, and run `scan` regularly.
+2. Paper-trade the rest with the scheduler for several weeks, until each has 30 or more trades.
 3. Keep only the ★ pairs whose paper results roughly match their backtest.
-4. Only then build the live broker adapter and the automation (scheduler, kill switch,
-   daily loss limit). That work is intentionally not started.
+4. Only then build the live broker adapter with a kill switch and a daily loss limit.
+   That work is intentionally not started.
 
 ## Tests
 

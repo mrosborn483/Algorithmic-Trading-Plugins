@@ -1,7 +1,6 @@
 """Command line entry point: python -m papertrader <command>
 
-Automation (schedulers / always-on loops / live execution) is intentionally NOT included yet.
-Run `scan` whenever you want the paper engine to check markets.
+`run` is a paper-only scheduler. Live execution is intentionally NOT included.
 """
 import argparse
 import logging
@@ -14,6 +13,7 @@ from . import data, report
 from .engine import backtest, paper_step
 from .notify import Notifier, fmt_price, format_event
 from .safety import LiveTradingLocked
+from .scheduler import Scheduler, install_signal_handlers, scan_lock
 from .strategies import REGISTRY
 
 log = logging.getLogger("papertrader")
@@ -39,6 +39,14 @@ def _load_frames(cfg, market, period=None):
 
 
 def cmd_scan(cfg, args):
+    with scan_lock(cfg.get("database", "data/paper.db")) as got_lock:
+        if not got_lock:
+            print("another scan is running - skipped")
+            return 0
+        return _scan(cfg, args)
+
+
+def _scan(cfg, args):
     broker = conf.make_broker(cfg)
     tg = Notifier(dry_run=args.dry_run)
     notify = cfg.get("telegram", {}).get("notify", {})
@@ -110,6 +118,25 @@ def cmd_backtest(cfg, args):
         Notifier().send(text)
 
 
+def cmd_run(cfg, args):
+    """Paper-only scheduler: scan every interval, daily leaderboard to Telegram."""
+    broker = conf.make_broker(cfg)
+    tg = Notifier(dry_run=args.dry_run)
+    scan_args = argparse.Namespace(market=None, strategy=None, dry_run=args.dry_run)
+    report_args = argparse.Namespace(by="market", csv=None, send=not args.dry_run)
+
+    sched = Scheduler(
+        load_config=lambda: conf.load(args.config),
+        scan=lambda c: cmd_scan(c, scan_args),
+        send_report=lambda c: cmd_report(c, report_args),
+        notify=tg.send,
+        get_state=broker.store.get_state,
+        set_state=broker.store.set_state,
+    )
+    install_signal_handlers(sched)
+    sched.run(max_runs=args.max_runs, run_now=not args.wait)
+
+
 def cmd_strategies(cfg, args):
     for name, cls in REGISTRY.items():
         print(f"{name:<18} {cls.description}")
@@ -151,6 +178,12 @@ def main(argv=None):
     p.add_argument("--csv")
     p.add_argument("--send", action="store_true")
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("run", help="PAPER-ONLY scheduler: scan every hour (config: schedule) + daily report")
+    p.add_argument("--dry-run", action="store_true", help="print alerts instead of sending to Telegram")
+    p.add_argument("--wait", action="store_true", help="wait for the next slot instead of scanning immediately")
+    p.add_argument("--max-runs", type=int, help=argparse.SUPPRESS)
+    p.set_defaults(fn=cmd_run)
 
     sub.add_parser("positions", help="list open paper positions").set_defaults(fn=cmd_positions)
     sub.add_parser("strategies", help="list available strategies").set_defaults(fn=cmd_strategies)

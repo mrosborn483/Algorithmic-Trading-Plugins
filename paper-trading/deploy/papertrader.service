@@ -1,0 +1,22 @@
+# systemd alternative to Docker. Assumes the repo is at /opt/Algorithmic-Trading-Plugins,
+# a venv at paper-trading/.venv, and a "trader" user. Install:
+#   sudo cp deploy/papertrader.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now papertrader
+#   journalctl -u papertrader -f
+[Unit]
+Description=Paper trader (PAPER ONLY hourly scheduler)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=trader
+WorkingDirectory=/opt/Algorithmic-Trading-Plugins/paper-trading
+EnvironmentFile=/opt/Algorithmic-Trading-Plugins/paper-trading/.env
+ExecStart=/opt/Algorithmic-Trading-Plugins/paper-trading/.venv/bin/python -m papertrader -c config.yaml run
+Restart=on-failure
+RestartSec=60
+# exit code 2 = config asked for live mode; don't restart into a refusal loop
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=multi-user.target
