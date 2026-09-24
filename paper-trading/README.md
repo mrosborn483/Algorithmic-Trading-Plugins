@@ -23,6 +23,9 @@ python -m papertrader scan                 # one paper pass, alerts sent to Tele
 python -m papertrader positions            # open paper positions
 python -m papertrader report --send        # wins/losses leaderboard -> Telegram
 python -m papertrader run                  # PAPER-ONLY scheduler: scan hourly + daily report
+python -m papertrader sweep --write best.yaml   # best strategy/settings per market over the past week
+python -m papertrader backtest --days 7    # your configured strategies over the past week
+python -m papertrader report --ai          # leaderboard + did the AI's calls hold up?
 ```
 
 Market data comes from Yahoo Finance by default and needs no API keys: `AAPL`, `EURUSD=X`,
@@ -64,6 +67,69 @@ What you'll receive:
 Every strategy also uses an ATR stop and target (`stop_atr`, `target_atr`). To add one,
 subclass `Strategy` in `papertrader/strategies/library.py`, return
 `entry, exit_long, exit_short` from `rules()`, and register it in `strategies/__init__.py`.
+
+### Running more strategies
+
+There's no fixed limit. Every strategy runs against the same downloaded bars, so adding
+strategies costs almost nothing: hundreds of strategy × market combinations scan in seconds.
+To run one strategy several times with different settings, give each copy its own name and
+a `type` in `config.yaml`:
+
+```yaml
+strategies:
+  ema_fast_crypto:
+    type: ema_crossover
+    markets: [crypto]
+    params: {fast: 5, slow: 21, stop_atr: 1.5, target_atr: 2.0}
+```
+
+The real limit is statistical, not technical. The more variants you run, the more of them
+will look good purely by luck. That's why the promotion criteria require 30 or more trades,
+and why `sweep` checks every recent winner against a longer window.
+
+## Finding the best strategy right now (`sweep`)
+
+```bash
+python -m papertrader sweep                      # last 7 days, checked against 90 days, all markets
+python -m papertrader sweep --days 14 --market crypto --top 10
+python -m papertrader sweep --write best.yaml --send
+```
+
+`sweep` tries every strategy with a grid of settings (about 160 variants, including different
+stop and target distances) on every market, in parallel across all CPU cores. It ranks them
+on the recent window. It then shows each variant's result over the longer window next to it
+and marks ✓ the ones that also hold up there (expectancy ≥ 0.10R, profit factor ≥ 1.2,
+10 or more trades). A variant that shines this week but lost money over 90 days was probably lucky.
+
+`--write best.yaml` saves the top ✓ variants per market as a ready-made `strategies:` block.
+Paste it into `config.yaml` so the scheduler starts paper-trading them. Re-running the sweep
+weekly and rotating strategies works, but always judge the result by paper results, not the sweep.
+
+`backtest --days 7` answers a narrower question: how the strategies already in your config
+did over the past N days.
+
+## AI trade reviewer (Claude)
+
+Setting `ai.enabled: true` in `config.yaml` (and `ANTHROPIC_API_KEY` in `.env`) makes Claude
+review every new signal before the paper trade opens. Claude receives the last 30 bars, key
+indicators, the daily trend, and that strategy's own paper track record, and returns
+**take / skip**, a confidence and a one-line reason.
+
+It's set up as an experiment you can measure, not a black box you have to trust:
+
+- **Twin accounts.** Each strategy keeps trading every signal. A twin account
+  `<strategy>+ai` trades only the signals Claude approves. In the leaderboard,
+  `ema_crossover` sits next to `ema_crossover+ai`, so you can see directly whether the AI helps.
+- **Every alert shows the verdict**, e.g. `🤖 AI: SKIP (35%) - entry is extended into
+  resistance, daily trend down`.
+- **`report --ai`** shows the win rate and average R of signals Claude approved versus rejected.
+  If rejected signals do just as well, the AI isn't adding anything. Turn it off.
+- **Safe failure.** If the API is down, over budget, or declines to answer, the twin skips
+  that trade and the plain strategy carries on unaffected.
+- **Cost cap.** `max_calls_per_day` limits spending; a review costs a few cents. Use
+  `ai.strategies` to review only some strategies.
+- **Forward paper trades only, never backtests.** The model may already know how past
+  prices moved, so backtested AI results would look better than they really are.
 
 ## How the paper simulation works
 

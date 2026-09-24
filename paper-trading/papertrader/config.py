@@ -43,11 +43,13 @@ def instruments(cfg: dict, market: str | None = None) -> list[tuple[Instrument, 
 
 def strategies(cfg: dict, only: str | None = None) -> list[tuple[Strategy, list[str] | None]]:
     out = []
-    for name, s in cfg.get("strategies", {}).items():
+    for label, s in cfg.get("strategies", {}).items():
         s = s or {}
-        if only and name != only:
+        if only and label != only:
             continue
         if not s.get("enabled", True) and not only:
             continue
-        out.append((build(name, s.get("params")), s.get("markets")))
+        # `type` lets one strategy run several times with different settings, e.g.
+        #   ema_fast: {type: ema_crossover, params: {fast: 5, slow: 13}}
+        out.append((build(s.get("type", label), s.get("params"), label=label), s.get("markets")))
     return out

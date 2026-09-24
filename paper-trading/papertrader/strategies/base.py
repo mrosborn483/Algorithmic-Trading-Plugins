@@ -21,7 +21,13 @@ class Strategy:
     default_params: ClassVar[dict] = {}
     base_params: ClassVar[dict] = {"atr_period": 14, "stop_atr": 2.0, "target_atr": 3.0}
 
-    def __init__(self, **params):
+    # Small grid of alternative settings tried by `sweep` (stops/targets are swept for every strategy)
+    grid: ClassVar[dict] = {}
+    stop_target_grid: ClassVar[list] = [(1.5, 2.0), (2.0, 3.0), (2.0, 4.0)]
+
+    def __init__(self, label: str | None = None, **params):
+        # label identifies this instance, so one strategy type can run with several settings
+        self.label = label or self.name
         unknown = set(params) - set(self.default_params) - set(self.base_params)
         if unknown:
             raise ValueError(f"{self.name}: unknown params {sorted(unknown)}")
@@ -45,4 +51,4 @@ class Strategy:
         return stop, target
 
     def __repr__(self):
-        return f"{self.name}({self.params})"
+        return f"{self.label}<{self.name}>({self.params})"

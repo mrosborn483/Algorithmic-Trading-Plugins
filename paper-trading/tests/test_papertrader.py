@@ -258,3 +258,132 @@ strategies:
     assert main(["-c", str(cfg), "run", "--dry-run", "--max-runs", "1"]) == 0
     out = capsys.readouterr().out
     assert "PAPER ONLY" in out and "scan complete" in out
+
+
+# -- strategy variants, window backtest, sweep -------------------------------
+from types import SimpleNamespace  # noqa: E402
+
+from papertrader import config as conf_mod  # noqa: E402
+from papertrader import sweep  # noqa: E402
+from papertrader.ai import AIReviewer, ai_scorecard, build_context  # noqa: E402
+
+
+def test_config_variants_of_same_strategy():
+    cfg = {"strategies": {"ema_fast": {"type": "ema_crossover", "params": {"fast": 5, "slow": 13}},
+                          "ema_crossover": {}}}
+    strats = [s for s, _ in conf_mod.strategies(cfg)]
+    assert [s.label for s in strats] == ["ema_fast", "ema_crossover"]
+    assert strats[0].params["fast"] == 5 and strats[1].params["fast"] == 9
+    broker = make_broker()
+    df = synthetic()
+    for s in strats:
+        backtest(broker, s, Instrument("BTC-USD", "crypto", "1h"), df)
+    assert set(broker.store.trades().strategy) == {"ema_fast", "ema_crossover"}
+
+
+def test_backtest_window_only_trades_recent_days():
+    broker = make_broker()
+    df = synthetic(2000)
+    start = df.index[-1] - pd.Timedelta(days=7)
+    backtest(broker, build("bollinger_bounce"), Instrument("BTC-USD", "crypto", "1h"), df, start=start)
+    trades = broker.store.trades()
+    assert len(trades) > 0
+    assert (pd.to_datetime(trades.entry_time) >= start).all()
+
+
+def test_sweep_variants_are_valid():
+    for name in REGISTRY:
+        vs = sweep.variants(name)
+        assert vs, name
+        for p in vs:
+            build(name, p)  # constructs without error
+    assert all(p["fast"] < p["slow"] for p in sweep.variants("ema_crossover"))
+    assert all(p["exit_period"] < p["entry_period"] for p in sweep.variants("donchian_breakout"))
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_sweep_ranks_and_writes_config(workers):
+    cfg = {"mode": "paper", "starting_balance": 10000,
+           "markets": {"crypto": {"timeframe": "1h", "symbols": ["A", "B"]}}}
+    frames = {"A": synthetic(3000, seed=3), "B": synthetic(3000, seed=4)}
+    res = sweep.run_sweep(cfg, frames, days=14, compare_days=90, strategy="donchian_breakout", workers=workers)
+    assert len(res) == len(sweep.variants("donchian_breakout"))
+    ranked = sweep.rank(res, min_trades=1)
+    text = sweep.format_ranked(ranked, 14, 90)
+    assert "crypto" in text
+    snippet = sweep.recommended_config(ranked)
+    import yaml
+    parsed = yaml.safe_load(snippet)["strategies"] or {}
+    for label, spec in parsed.items():
+        assert spec["type"] == "donchian_breakout" and spec["markets"] == ["crypto"]
+        build(spec["type"], spec["params"], label=label)
+
+
+# -- AI reviewer ---------------------------------------------------------------
+class FakeClient:
+    def __init__(self, decision="take", confidence=0.8, stop_reason="end_turn", fail=False):
+        self.calls = []
+        outer = self
+
+        class Messages:
+            def create(self, **kw):
+                outer.calls.append(kw)
+                if fail:
+                    raise ConnectionError("down")
+                text = '{"decision": "%s", "confidence": %s, "reasoning": "trend aligned"}' % (decision, confidence)
+                return SimpleNamespace(stop_reason=stop_reason, model=kw["model"],
+                                       content=[SimpleNamespace(type="thinking"), SimpleNamespace(type="text", text=text)])
+
+        self.beta = SimpleNamespace(messages=Messages())
+
+
+def _walk_with_ai(client, settings=None, strategy="bollinger_bounce", bars=(1000, 1400)):
+    broker = make_broker()
+    reviewer = AIReviewer(broker.store, {"enabled": True, **(settings or {})}, 10_000, client=client)
+    strat, inst, df = build(strategy), Instrument("BTC-USD", "crypto", "1h"), synthetic()
+    events = []
+    for i in range(*bars):
+        events += paper_step(broker, strat, inst, df.iloc[:i], reviewer=reviewer)
+    return broker, events
+
+
+def test_ai_twin_takes_approved_trades_and_request_shape():
+    client = FakeClient("take", 0.9)
+    broker, events = _walk_with_ai(client)
+    trades = broker.store.trades()
+    assert set(trades.strategy) == {"bollinger_bounce", "bollinger_bounce+ai"}
+    # one API call per signal, shared by both accounts
+    plain_entries = [e for e in events if e.kind == "entry" and e.position.strategy == "bollinger_bounce"]
+    assert len(client.calls) == len(plain_entries) > 0
+    assert all("🤖 AI: TAKE" in e.note for e in plain_entries)
+    kw = client.calls[0]
+    assert kw["model"] == "claude-opus-5" and kw["fallbacks"] == "default"
+    assert kw["output_config"]["format"]["type"] == "json_schema"
+    assert "BTC-USD" in kw["messages"][0]["content"]
+    assert len(broker.store.ai_decisions()) == len(client.calls)
+
+
+def test_ai_skip_low_confidence_refusal_and_outage_block_only_the_twin():
+    for client in (FakeClient("skip", 0.9), FakeClient("take", 0.3), FakeClient(stop_reason="refusal"),
+                   FakeClient(fail=True)):
+        broker, events = _walk_with_ai(client)
+        strategies = set(broker.store.trades().strategy)
+        assert strategies == {"bollinger_bounce"}, client
+        assert any(e.kind == "skip" for e in events)
+
+
+def test_ai_daily_budget_caps_calls():
+    client = FakeClient("take", 0.9)
+    _walk_with_ai(client, {"max_calls_per_day": 2})
+    assert len(client.calls) == 2
+
+
+def test_ai_scorecard_and_context():
+    broker, _ = _walk_with_ai(FakeClient("take", 0.9))
+    card = ai_scorecard(broker.store)
+    assert "AI take" in card.index and card.loc["AI take", "signals"] > 0
+    df = build("macd_trend").signals(synthetic())
+    bar = df.iloc[-1]
+    ctx = build_context(build("macd_trend"), Instrument("EURUSD=X", "fx", "1h"), df.index[-1], bar, 1,
+                        bar.close * 0.99, bar.close * 1.02, df, "no trades yet")
+    assert "EURUSD=X" in ctx and "RSI(14)" in ctx and "Last 30 bars" in ctx and "nan" not in ctx.lower()

@@ -14,6 +14,7 @@ class EmaCrossover(Strategy):
     name = "ema_crossover"
     description = "Fast/slow EMA cross in the direction of the long-term trend (WEMA-style trend follower)."
     default_params = {"fast": 9, "slow": 21, "trend": 200}
+    grid = {"fast": [5, 9, 13], "slow": [21, 34, 55]}
 
     def rules(self, df):
         c = df["close"]
@@ -27,6 +28,7 @@ class RsiMeanReversion(Strategy):
     name = "rsi_reversion"
     description = "Buy oversold dips in an uptrend / sell overbought rips in a downtrend; exit when RSI returns to 50."
     default_params = {"period": 14, "oversold": 30, "overbought": 70, "trend": 200, "stop_atr": 1.5, "target_atr": 2.0}
+    grid = {"period": [7, 14], "oversold": [25, 30], "overbought": [70, 75], "trend": [100, 200]}
 
     def rules(self, df):
         c = df["close"]
@@ -41,6 +43,7 @@ class BollingerBounce(Strategy):
     name = "bollinger_bounce"
     description = "Close re-enters the Bollinger Band after piercing it (port of BB-Top-Bounce); exit at the middle band."
     default_params = {"period": 20, "std": 2.0, "stop_atr": 1.5, "target_atr": 2.5}
+    grid = {"period": [14, 20, 30], "std": [2.0, 2.5]}
 
     def rules(self, df):
         c = df["close"]
@@ -54,6 +57,7 @@ class KeltnerBollingerSqueeze(Strategy):
     name = "keltner_squeeze"
     description = "Bollinger Bands contract inside Keltner Channels, then trade the breakout (port of Keltner_Bollinger)."
     default_params = {"period": 20, "bb_std": 2.0, "kc_mult": 1.5, "min_squeeze_bars": 5}
+    grid = {"kc_mult": [1.25, 1.5, 2.0], "min_squeeze_bars": [3, 5, 8]}
 
     def rules(self, df):
         c = df["close"]
@@ -72,6 +76,7 @@ class DonchianBreakout(Strategy):
     name = "donchian_breakout"
     description = "Turtle-style: close breaks the N-bar high/low; exit on the opposite M-bar channel."
     default_params = {"entry_period": 20, "exit_period": 10, "stop_atr": 2.0, "target_atr": 4.0}
+    grid = {"entry_period": [10, 20, 55], "exit_period": [5, 10, 20]}
 
     def rules(self, df):
         c = df["close"]
@@ -84,6 +89,7 @@ class MacdTrend(Strategy):
     name = "macd_trend"
     description = "MACD crosses its signal line with price on the right side of the 200 EMA."
     default_params = {"fast": 12, "slow": 26, "signal": 9, "trend": 200}
+    grid = {"fast": [8, 12], "slow": [21, 26], "trend": [100, 200]}
 
     def rules(self, df):
         c = df["close"]

@@ -3,6 +3,8 @@ numpy>=1.24
 requests>=2.28
 PyYAML>=6.0
 yfinance>=0.2.40
+# AI trade reviewer (only used when ai.enabled is true)
+anthropic>=1.0
 # optional: exchange data for crypto (source: "ccxt:kraken" etc.)
 # ccxt>=4.0
 # dev

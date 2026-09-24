@@ -70,6 +70,7 @@ def format_event(ev: Event, account_summary: str = "") -> str:
             f"Stop: {fmt_price(p.stop)} · Target: {fmt_price(p.target)}\n"
             f"Size: {p.qty:.6g} · Risk: ${p.risk_amount:,.2f}\n"
             f"Time: {p.entry_time}"
+            + (f"\n{html.escape(ev.note)}" if ev.note else "")
         )
     t = ev.trade
     win = t.pnl > 0

@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS trades (
     pnl REAL, fees REAL, r_multiple REAL, return_pct REAL
 );
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS ai_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT, strategy TEXT, symbol TEXT, timeframe TEXT, bar_time TEXT, side INTEGER,
+    take INTEGER, confidence REAL, reasoning TEXT, model TEXT
+);
 """
 
 
@@ -110,6 +115,16 @@ class Store:
     def realized_pnl(self, account: str) -> float:
         row = self.db.execute("SELECT COALESCE(SUM(pnl), 0) FROM trades WHERE account=?", (account,)).fetchone()
         return float(row[0])
+
+    # -- AI reviews --------------------------------------------------------
+    def add_ai_decision(self, **row):
+        self.db.execute(
+            f"INSERT INTO ai_decisions ({','.join(row)}) VALUES ({','.join('?' * len(row))})", list(row.values())
+        )
+        self.db.commit()
+
+    def ai_decisions(self) -> pd.DataFrame:
+        return pd.read_sql_query("SELECT * FROM ai_decisions ORDER BY id", self.db)
 
     # -- state -------------------------------------------------------------
     def get_state(self, key: str) -> str | None:
