@@ -1,0 +1,79 @@
+# Copy to config.yaml and edit. config.yaml is git-ignored.
+#
+# mode must stay "paper". Anything else is refused: live trading is LOCKED until the
+# paper phase is finalized and a live broker adapter has been built and reviewed.
+mode: paper
+
+database: data/paper.db
+
+# Every strategy x asset-class pair gets its own virtual account with this balance,
+# so the strategies can be compared fairly.
+starting_balance: 10000
+
+risk:
+  risk_per_trade_pct: 1.0      # % of account equity lost if the stop is hit
+  max_leverage:                # caps position notional as a multiple of equity
+    crypto: 2
+    stocks: 1
+    fx: 10
+
+costs:                         # per side, in basis points (1 bp = 0.01%)
+  crypto: {fee_bps: 10, slippage_bps: 5}
+  stocks: {fee_bps: 0,  slippage_bps: 2}
+  fx:     {fee_bps: 0,  slippage_bps: 1}
+
+markets:
+  crypto:
+    source: yfinance           # or e.g. "ccxt:kraken" with symbols like "BTC/USD" (pip install ccxt)
+    timeframe: 1h              # 5m 15m 30m 1h 4h 1d
+    allow_short: true
+    symbols: [BTC-USD, ETH-USD, SOL-USD, XRP-USD]
+  stocks:
+    source: yfinance
+    timeframe: 1h
+    allow_short: false
+    symbols: [SPY, QQQ, AAPL, MSFT, NVDA, TSLA, AMZN]
+  fx:
+    source: yfinance
+    timeframe: 1h
+    allow_short: true
+    symbols: [EURUSD=X, GBPUSD=X, USDJPY=X, AUDUSD=X, USDCAD=X]
+
+# Every strategy runs on every market listed. Tune params after backtesting.
+# Shared params for all strategies: atr_period, stop_atr, target_atr
+strategies:
+  ema_crossover:
+    enabled: true
+    markets: [crypto, stocks, fx]
+    params: {fast: 9, slow: 21, trend: 200}
+  rsi_reversion:
+    enabled: true
+    markets: [crypto, stocks, fx]
+    params: {period: 14, oversold: 30, overbought: 70}
+  bollinger_bounce:
+    enabled: true
+    markets: [crypto, stocks, fx]
+  keltner_squeeze:
+    enabled: true
+    markets: [crypto, stocks, fx]
+  donchian_breakout:
+    enabled: true
+    markets: [crypto, stocks, fx]
+  macd_trend:
+    enabled: true
+    markets: [crypto, stocks, fx]
+
+telegram:
+  # Credentials are read from env vars TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (never put them here)
+  notify:
+    entries: true
+    exits: true      # WIN / LOSS messages
+    errors: true
+
+# A strategy x market gets a ★ in the leaderboard (candidate for live) only when all of these hold
+promotion:
+  min_trades: 30
+  min_profit_factor: 1.3
+  min_win_rate: 0.35
+  min_expectancy_r: 0.10
+  max_drawdown_pct: 15
